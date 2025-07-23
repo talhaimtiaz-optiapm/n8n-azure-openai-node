@@ -81,7 +81,7 @@ export class AzureOpenAi implements INodeType {
 				displayName: 'Messages',
 				name: 'messages',
 				type: 'fixedCollection',
-				typeOptions: { 
+				typeOptions: {
 					multipleValues: true,
 					sortable: true,
 				},
@@ -162,6 +162,18 @@ export class AzureOpenAi implements INodeType {
 				type: 'boolean',
 				default: true,
 				description: 'Whether to return a simplified version of the response instead of the raw data',
+				displayOptions: {
+					show: {
+						resource: ['chatCompletion'],
+					},
+				},
+			},
+			{
+				displayName: 'Output Content as JSON',
+				name: 'outputContentAsJson',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to attempt to parse the response content as JSON. Compatible with GPT-4 Turbo and GPT-3.5 Turbo models newer than gpt-3.5-turbo-1106.',
 				displayOptions: {
 					show: {
 						resource: ['chatCompletion'],
@@ -252,7 +264,7 @@ export class AzureOpenAi implements INodeType {
 				const endpoint = credentials.endpoint as string;
 				const apiKey = credentials.apiKey as string;
 				const apiVersion = credentials.apiVersion as string;
-				
+
 				try {
 					const response = await this.helpers.httpRequest({
 						method: 'GET',
@@ -263,9 +275,9 @@ export class AzureOpenAi implements INodeType {
 						},
 						json: true,
 					});
-					
+
 					if (!response.data || !Array.isArray(response.data)) return [];
-					
+
 					return response.data.map((model: any) => ({
 						name: model.id,
 						value: model.id,
@@ -280,7 +292,7 @@ export class AzureOpenAi implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
-		
+
 		// Get credentials once
 		const credentials = await this.getCredentials('azureOpenAiApi');
 		const endpoint = credentials.endpoint as string;
@@ -291,7 +303,7 @@ export class AzureOpenAi implements INodeType {
 		// Performance optimization: Process items in parallel batches with user-configurable concurrency
 		const concurrentMode = this.getNodeParameter('concurrentMode', 0, 'single') as string;
 		let batchSize: number;
-		
+
 		// Map concurrent mode to actual numbers
 		switch (concurrentMode) {
 			case 'single':
@@ -312,9 +324,9 @@ export class AzureOpenAi implements INodeType {
 			default:
 				batchSize = 1; // fallback to single
 		}
-		
+
 		const batches: INodeExecutionData[][] = [];
-		
+
 		for (let i = 0; i < items.length; i += batchSize) {
 			batches.push(items.slice(i, i + batchSize));
 		}
@@ -323,12 +335,12 @@ export class AzureOpenAi implements INodeType {
 			// Process batch in parallel
 			const promises = batch.map(async (item, batchIndex) => {
 				const itemIndex = batches.indexOf(batch) * batchSize + batchIndex;
-				
+
 				try {
 					// Handle deployment selection
 					const deploymentSelection = this.getNodeParameter('deploymentSelection', itemIndex, 'credential') as string;
 					let deploymentName: string;
-					
+
 					switch (deploymentSelection) {
 						case 'credential':
 							deploymentName = deploymentFromCredentials;
@@ -347,7 +359,8 @@ export class AzureOpenAi implements INodeType {
 					}
 					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as any;
 					const simplifyOutput = this.getNodeParameter('simplifyOutput', itemIndex, true) as boolean;
-					
+					const outputContentAsJson = this.getNodeParameter('outputContentAsJson', itemIndex, false) as boolean;
+
 					let path = '';
 					const requestBody: Record<string, any> = {};
 
@@ -371,7 +384,7 @@ export class AzureOpenAi implements INodeType {
 					if (additionalFields.n) requestBody.n = additionalFields.n;
 
 					const url = `${endpoint}${path}?api-version=${apiVersion}`;
-					
+
 					// Performance optimization: Use optimized HTTP request configuration
 					const response = await this.helpers.httpRequest({
 						method: 'POST',
@@ -404,9 +417,32 @@ export class AzureOpenAi implements INodeType {
 						responseData = response;
 					}
 
-					return { 
-						json: responseData, 
-						pairedItem: { item: itemIndex } 
+					// Apply JSON parsing if enabled
+					if (outputContentAsJson && responseData.message?.content) {
+						const content = responseData.message.content;
+						if (typeof content === 'string') {
+							// Try to extract JSON from markdown code blocks first
+							const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+							if (jsonMatch) {
+								try {
+									responseData.message.content = JSON.parse(jsonMatch[1]);
+								} catch (error) {
+									// Keep original content if parsing fails
+								}
+							} else {
+								// Try to parse the entire content as JSON
+								try {
+									responseData.message.content = JSON.parse(content);
+								} catch (error) {
+									// Keep original content if parsing fails
+								}
+							}
+						}
+					}
+
+					return {
+						json: responseData,
+						pairedItem: { item: itemIndex }
 					};
 
 				} catch (error: any) {
@@ -418,15 +454,15 @@ export class AzureOpenAi implements INodeType {
 					};
 
 					if (this.continueOnFail()) {
-						return { 
-							json: errorData, 
-							pairedItem: { item: itemIndex } 
+						return {
+							json: errorData,
+							pairedItem: { item: itemIndex }
 						};
 					} else {
 						throw new NodeOperationError(
-							this.getNode(), 
+							this.getNode(),
 							`Azure OpenAI Error: ${error.message}`,
-							{ 
+							{
 								itemIndex,
 								description: `Status: ${errorData.status}. Check your credentials and deployment configuration.`,
 							}
