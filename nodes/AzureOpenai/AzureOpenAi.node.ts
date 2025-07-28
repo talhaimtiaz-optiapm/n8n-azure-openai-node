@@ -42,7 +42,7 @@ export class AzureOpenAi implements INodeType {
 					{ name: 'Chat Completion', value: 'chatCompletion' },
 				],
 				default: 'chatCompletion',
-				description: 'Select the type of Azure OpenAI resource to use.',
+				description: 'Select the type of Azure OpenAI resource to use',
 			},
 			{
 				displayName: 'Deployment',
@@ -55,7 +55,7 @@ export class AzureOpenAi implements INodeType {
 					{ name: 'Custom Deployment Name', value: 'custom' },
 				],
 				default: 'credential',
-				description: 'Select the deployment to use or choose custom to enter a specific deployment name.',
+				description: 'Select the deployment to use or choose custom to enter a specific deployment name',
 				displayOptions: {
 					show: {
 						resource: ['chatCompletion'],
@@ -69,7 +69,7 @@ export class AzureOpenAi implements INodeType {
 				default: '',
 				placeholder: 'Enter your deployment name',
 				required: true,
-				description: 'Enter your custom deployment name.',
+				description: 'Enter your custom deployment name',
 				displayOptions: {
 					show: {
 						resource: ['chatCompletion'],
@@ -125,11 +125,11 @@ export class AzureOpenAi implements INodeType {
 				name: 'concurrentMode',
 				type: 'options',
 				options: [
-					{ name: 'Single (1)', value: 'single' },
+					{ name: 'Custom (1-20)', value: 'custom' },
+					{ name: 'High (10)', value: 'high' },
 					{ name: 'Low (2)', value: 'low' },
 					{ name: 'Medium (6)', value: 'medium' },
-					{ name: 'High (10)', value: 'high' },
-					{ name: 'Custom (1-20)', value: 'custom' },
+					{ name: 'Single (1)', value: 'single' },
 				],
 				default: 'single',
 				description: 'Choose processing speed. Higher values are faster but may hit rate limits.',
@@ -148,11 +148,40 @@ export class AzureOpenAi implements INodeType {
 					minValue: 1,
 					maxValue: 20,
 				},
-				description: 'Enter custom number of concurrent requests (1-20).',
+				description: 'Enter custom number of concurrent requests (1-20)',
 				displayOptions: {
 					show: {
 						resource: ['chatCompletion'],
 						concurrentMode: ['custom'],
+					},
+				},
+			},
+			{
+				displayName: 'Enable Determinism',
+				name: 'enableDeterminism',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to enable deterministic outputs using seed values. When enabled, the same inputs will produce consistent results.',
+				displayOptions: {
+					show: {
+						resource: ['chatCompletion'],
+					},
+				},
+			},
+			{
+				displayName: 'Seed Value',
+				name: 'seedValue',
+				type: 'number',
+				default: 42,
+				typeOptions: {
+					minValue: -2147483648,
+					maxValue: 2147483647,
+				},
+				description: 'Seed value for deterministic outputs. Use the same seed for consistent results across runs.',
+				displayOptions: {
+					show: {
+						resource: ['chatCompletion'],
+						enableDeterminism: [true],
 					},
 				},
 			},
@@ -188,11 +217,41 @@ export class AzureOpenAi implements INodeType {
 				default: {},
 				options: [
 					{
+						displayName: 'Frequency Penalty',
+						name: 'frequency_penalty',
+						type: 'number',
+						default: 0,
+						typeOptions: { maxValue: 2, minValue: -2, numberPrecision: 1 },
+						description: 'How much to penalize new tokens based on their existing frequency',
+					},
+					{
 						displayName: 'Max Tokens',
 						name: 'max_tokens',
 						type: 'number',
 						default: 1000,
 						description: 'The maximum number of tokens to generate',
+					},
+					{
+						displayName: 'Number of Completions',
+						name: 'n',
+						type: 'number',
+						default: 1,
+						description: 'How many completions to generate for each prompt',
+					},
+					{
+						displayName: 'Presence Penalty',
+						name: 'presence_penalty',
+						type: 'number',
+						default: 0,
+						typeOptions: { maxValue: 2, minValue: -2, numberPrecision: 1 },
+						description: 'How much to penalize new tokens based on whether they appear in the text',
+					},
+					{
+						displayName: 'Stop Sequences',
+						name: 'stop',
+						type: 'string',
+						default: '',
+						description: 'Up to 4 sequences where the API will stop generating further tokens (comma-separated)',
 					},
 					{
 						displayName: 'Temperature',
@@ -209,36 +268,6 @@ export class AzureOpenAi implements INodeType {
 						default: 1,
 						typeOptions: { maxValue: 1, minValue: 0, numberPrecision: 1 },
 						description: 'Controls diversity via nucleus sampling',
-					},
-					{
-						displayName: 'Frequency Penalty',
-						name: 'frequency_penalty',
-						type: 'number',
-						default: 0,
-						typeOptions: { maxValue: 2, minValue: -2, numberPrecision: 1 },
-						description: 'How much to penalize new tokens based on their existing frequency',
-					},
-					{
-						displayName: 'Presence Penalty',
-						name: 'presence_penalty',
-						type: 'number',
-						default: 0,
-						typeOptions: { maxValue: 2, minValue: -2, numberPrecision: 1 },
-						description: 'How much to penalize new tokens based on whether they appear in the text',
-					},
-					{
-						displayName: 'Number of Completions',
-						name: 'n',
-						type: 'number',
-						default: 1,
-						description: 'How many completions to generate for each prompt',
-					},
-					{
-						displayName: 'Stop Sequences',
-						name: 'stop',
-						type: 'string',
-						default: '',
-						description: 'Up to 4 sequences where the API will stop generating further tokens (comma-separated)',
 					},
 					{
 						displayName: 'User ID',
@@ -360,6 +389,8 @@ export class AzureOpenAi implements INodeType {
 					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as any;
 					const simplifyOutput = this.getNodeParameter('simplifyOutput', itemIndex, true) as boolean;
 					const outputContentAsJson = this.getNodeParameter('outputContentAsJson', itemIndex, false) as boolean;
+					const enableDeterminism = this.getNodeParameter('enableDeterminism', itemIndex, false) as boolean;
+					const seedValue = this.getNodeParameter('seedValue', itemIndex, 42) as number;
 
 					let path = '';
 					const requestBody: Record<string, any> = {};
@@ -382,6 +413,9 @@ export class AzureOpenAi implements INodeType {
 						requestBody.stop = additionalFields.stop.split(',').map((s: string) => s.trim()).filter(Boolean);
 					}
 					if (additionalFields.n) requestBody.n = additionalFields.n;
+															if (enableDeterminism) {
+						requestBody.seed = seedValue;
+					}
 
 					const url = `${endpoint}${path}?api-version=${apiVersion}`;
 
@@ -398,6 +432,13 @@ export class AzureOpenAi implements INodeType {
 						timeout: 60000, // 60 second timeout
 					});
 
+					// Add debug info to response for troubleshooting
+					const debugInfo = {
+						seedUsed: enableDeterminism ? seedValue : 'not_used',
+						temperature: requestBody.temperature || 'default',
+						determinismEnabled: enableDeterminism
+					};
+
 					// Performance optimization: Streamlined response processing
 					let responseData;
 					if (simplifyOutput) {
@@ -408,13 +449,15 @@ export class AzureOpenAi implements INodeType {
 								index: choice.index,
 								message: choice.message,
 								logprobs: choice.logprobs || null,
-								finish_reason: choice.finish_reason
+								finish_reason: choice.finish_reason,
+								debug: debugInfo
 							};
 						} else {
 							responseData = response;
 						}
 					} else {
 						responseData = response;
+						responseData.debug = debugInfo;
 					}
 
 					// Apply JSON parsing if enabled
