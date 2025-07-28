@@ -198,6 +198,18 @@ export class AzureOpenAi implements INodeType {
 				},
 			},
 			{
+				displayName: 'Show Full Response',
+				name: 'showFullResponse',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to include all Azure OpenAI metadata (usage, model, system_fingerprint, etc.) in the response. Useful for debugging and detailed analysis.',
+				displayOptions: {
+					show: {
+						resource: ['chatCompletion'],
+					},
+				},
+			},
+			{
 				displayName: 'Output Content as JSON',
 				name: 'outputContentAsJson',
 				type: 'boolean',
@@ -388,6 +400,7 @@ export class AzureOpenAi implements INodeType {
 					}
 					const additionalFields = this.getNodeParameter('additionalFields', itemIndex, {}) as any;
 					const simplifyOutput = this.getNodeParameter('simplifyOutput', itemIndex, true) as boolean;
+					const showFullResponse = this.getNodeParameter('showFullResponse', itemIndex, false) as boolean;
 					const outputContentAsJson = this.getNodeParameter('outputContentAsJson', itemIndex, false) as boolean;
 					const enableDeterminism = this.getNodeParameter('enableDeterminism', itemIndex, false) as boolean;
 					const seedValue = this.getNodeParameter('seedValue', itemIndex, 42) as number;
@@ -399,23 +412,31 @@ export class AzureOpenAi implements INodeType {
 					const messagesData = this.getNodeParameter('messages', itemIndex) as {
 						messagesUi: Array<{ role: string; content: string }>;
 					};
-					requestBody.messages = messagesData.messagesUi;
 					path = `/openai/deployments/${deploymentName}/chat/completions`;
 
-					// Handle additional fields efficiently
+					// Build request body in deterministic order for consistent results
+					requestBody.messages = messagesData.messagesUi;
+
+					// Handle determinism settings first
+					if (enableDeterminism) {
+						requestBody.seed = seedValue;
+						// Force temperature=0 for true determinism if not explicitly set
+						if (additionalFields.temperature === undefined) {
+							requestBody.temperature = 0;
+						}
+					}
+
+					// Handle additional fields in alphabetical order for consistency
+					if (additionalFields.frequency_penalty !== undefined) requestBody.frequency_penalty = additionalFields.frequency_penalty;
 					if (additionalFields.max_tokens) requestBody.max_tokens = additionalFields.max_tokens;
-					if (additionalFields.temperature) requestBody.temperature = additionalFields.temperature;
-					if (additionalFields.top_p) requestBody.top_p = additionalFields.top_p;
-					if (additionalFields.frequency_penalty) requestBody.frequency_penalty = additionalFields.frequency_penalty;
-					if (additionalFields.presence_penalty) requestBody.presence_penalty = additionalFields.presence_penalty;
-					if (additionalFields.user) requestBody.user = additionalFields.user;
+					if (additionalFields.n) requestBody.n = additionalFields.n;
+					if (additionalFields.presence_penalty !== undefined) requestBody.presence_penalty = additionalFields.presence_penalty;
 					if (additionalFields.stop) {
 						requestBody.stop = additionalFields.stop.split(',').map((s: string) => s.trim()).filter(Boolean);
 					}
-					if (additionalFields.n) requestBody.n = additionalFields.n;
-															if (enableDeterminism) {
-						requestBody.seed = seedValue;
-					}
+					if (additionalFields.temperature !== undefined) requestBody.temperature = additionalFields.temperature;
+					if (additionalFields.top_p !== undefined) requestBody.top_p = additionalFields.top_p;
+					if (additionalFields.user) requestBody.user = additionalFields.user;
 
 					const url = `${endpoint}${path}?api-version=${apiVersion}`;
 
@@ -435,13 +456,28 @@ export class AzureOpenAi implements INodeType {
 					// Add debug info to response for troubleshooting
 					const debugInfo = {
 						seedUsed: enableDeterminism ? seedValue : 'not_used',
-						temperature: requestBody.temperature || 'default',
-						determinismEnabled: enableDeterminism
+						temperature: requestBody.temperature !== undefined ? requestBody.temperature : 'default',
+						determinismEnabled: enableDeterminism,
+						// Debug: Show the raw values for troubleshooting
+						_debug_additionalFields_temperature: additionalFields.temperature,
+						_debug_requestBody_temperature: requestBody.temperature
 					};
 
 					// Performance optimization: Streamlined response processing
 					let responseData;
-					if (simplifyOutput) {
+					if (showFullResponse) {
+						// Return full response with all Azure OpenAI metadata
+						responseData = {
+							...response,
+							debug: debugInfo,
+							_request_metadata: {
+								deployment: deploymentName,
+								api_version: apiVersion,
+								endpoint: endpoint.replace(/\/$/, ''), // Remove trailing slash for cleaner output
+								request_body: requestBody
+							}
+						};
+					} else if (simplifyOutput) {
 						// Return choice object filtered to match native OpenAI format (exclude Azure-specific fields)
 						const choice = response.choices?.[0];
 						if (choice) {
@@ -493,7 +529,6 @@ export class AzureOpenAi implements INodeType {
 					const errorData = {
 						error: error.message || 'Unknown error',
 						status: error.response?.status || error.statusCode || 'unknown',
-						timestamp: new Date().toISOString(),
 					};
 
 					if (this.continueOnFail()) {
