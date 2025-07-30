@@ -237,10 +237,12 @@ export class AzureOpenAi implements INodeType {
 						description: 'How much to penalize new tokens based on their existing frequency',
 					},
 					{
+						// OpenAI default is ~16; use the same so we do not accidentally
+						// override the API when the user does not touch this field.
 						displayName: 'Max Tokens',
 						name: 'max_tokens',
 						type: 'number',
-						default: 1000,
+						default: 16,
 						description: 'The maximum number of tokens to generate',
 					},
 					{
@@ -259,6 +261,9 @@ export class AzureOpenAi implements INodeType {
 						description: 'How much to penalize new tokens based on whether they appear in the text',
 					},
 					{
+						// Handle stop sequences exactly like the OpenAI node:
+						//  • if the user provides a single sequence we pass a string
+						//  • if multiple sequences (comma-separated) we pass an array
 						displayName: 'Stop Sequences',
 						name: 'stop',
 						type: 'string',
@@ -266,10 +271,12 @@ export class AzureOpenAi implements INodeType {
 						description: 'Up to 4 sequences where the API will stop generating further tokens (comma-separated)',
 					},
 					{
+						// Align default with OpenAI (1.0) so behaviour is identical when
+						// the user does not explicitly set it.
 						displayName: 'Temperature',
 						name: 'temperature',
 						type: 'number',
-						default: 0.7,
+						default: 1,
 						typeOptions: { maxValue: 2, minValue: 0, numberPrecision: 1 },
 						description: 'Controls randomness: Lowering results in less random completions',
 					},
@@ -431,8 +438,15 @@ export class AzureOpenAi implements INodeType {
 					if (additionalFields.max_tokens) requestBody.max_tokens = additionalFields.max_tokens;
 					if (additionalFields.n) requestBody.n = additionalFields.n;
 					if (additionalFields.presence_penalty !== undefined) requestBody.presence_penalty = additionalFields.presence_penalty;
+					// Handle stop sequences exactly like the OpenAI node:
+					//  • if the user provides a single sequence we pass a string
+					//  • if multiple sequences (comma-separated) we pass an array
 					if (additionalFields.stop) {
-						requestBody.stop = additionalFields.stop.split(',').map((s: string) => s.trim()).filter(Boolean);
+						const stops = additionalFields.stop
+							.split(',')
+							.map((s: string) => s.trim())
+							.filter(Boolean);
+						requestBody.stop = stops.length === 1 ? stops[0] : stops;
 					}
 					if (additionalFields.temperature !== undefined) requestBody.temperature = additionalFields.temperature;
 					if (additionalFields.top_p !== undefined) requestBody.top_p = additionalFields.top_p;
